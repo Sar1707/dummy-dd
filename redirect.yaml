@@ -1,0 +1,7 @@
+# URL map for the port-80 proxy: sends every HTTP request to HTTPS.
+# Import with:
+#   gcloud compute url-maps import dummy-web-redirect --global --source=redirect.yaml
+name: dummy-web-redirect
+defaultUrlRedirect:
+  httpsRedirect: true
+  redirectResponseCode: MOVED_PERMANENTLY_DEFAULT

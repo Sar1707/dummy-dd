@@ -1,0 +1,54 @@
+# Builds the dashboard and uploads it to a GCS bucket served by an LB + Cloud CDN.
+# Substitutions (_MODE, _BUCKET_NAME) can be overridden on the Cloud Build trigger.
+steps:
+  # 1. Install + build from the repo ROOT — this is a pnpm workspace, so there is
+  #    no package-lock.json for `npm ci`, and apps/dashboard can't install alone.
+  - id: build
+    name: node:22
+    entrypoint: bash
+    env:
+      - COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+    args:
+      - -c
+      - |
+        set -e
+        corepack enable
+        pnpm install --frozen-lockfile
+        pnpm --filter dashboard build:${_MODE}
+
+  # 2. Upload with the right Cache-Control set AT upload time (never patched after).
+  #    Order: hashed assets → other public files → index.html LAST, so no user ever
+  #    gets an index.html pointing at files that aren't uploaded yet.
+  #    No --delete: old hashed assets stay so already-open tabs keep working.
+  - id: upload
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    dir: apps/dashboard/dist
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        echo "Deploying ${_MODE} build to gs://${_BUCKET_NAME} ..."
+
+        # Fingerprinted JS/CSS (names change with content) → cache for a year
+        gcloud storage rsync assets gs://${_BUCKET_NAME}/assets --recursive \
+          --cache-control="public, max-age=31536000, immutable"
+
+        # Un-hashed public files (favicon, robots.txt, ...) → short cache
+        gcloud storage rsync . gs://${_BUCKET_NAME} --recursive \
+          --exclude="^assets/|^index\.html$$" \
+          --cache-control="public, max-age=300"
+
+        # Entry point → always revalidate, so a deploy is visible immediately
+        gcloud storage cp index.html gs://${_BUCKET_NAME}/index.html \
+          --cache-control="no-cache"
+
+substitutions:
+  _MODE: production
+  _BUCKET_NAME: virtual-plexus-510706-r6-frontend
+
+options:
+  # Required when the build runs as a user-specified service account
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: 900s
